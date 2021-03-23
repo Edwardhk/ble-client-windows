@@ -20,6 +20,7 @@ namespace EmpaticaBLEClient
         const int ServerPort = 28000;
         public Socket TCPsocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         public bool ConnectDone = false;
+        string _response = "";
 
         // Device params
         public string ID = "";
@@ -28,6 +29,8 @@ namespace EmpaticaBLEClient
             "acc", "bvp", "gsr", "ibi", "tmp", "bat", "tag"
         };
         public Dictionary<string, DataStream> dataStreams = new Dictionary<string, DataStream>();
+
+        // 
         
         public E4Device(string id, bool ifAllowed)
         {
@@ -38,11 +41,19 @@ namespace EmpaticaBLEClient
 
             if (ifAllowed)
             {
-                // Establish TCP connections for the device
+                // Establish TCP socket for the device
                 var ipHostInfo = new IPHostEntry { AddressList = new[] { IPAddress.Parse(ServerAddress) } };
                 var ipAddress = ipHostInfo.AddressList[0];
                 var remoteEp = new IPEndPoint(ipAddress, ServerPort);
                 TCPsocket.BeginConnect(remoteEp, (ConnectCallback), TCPsocket);
+
+                // Establish connect request on TCP socket
+                byte[] byteData = Encoding.ASCII.GetBytes("device_connect " + ID);
+                TCPsocket.BeginSend(byteData, 0, byteData.Length, 0, (SendCallback), TCPsocket);
+
+                // Establish listening callback
+                var state = new StateObject { WorkSocket = TCPsocket };
+                TCPsocket.BeginReceive(state.Buffer, 0, StateObject.BufferSize, 0, ReceiveCallback, state);
             }
         }
         void ConnectCallback(IAsyncResult ar)
@@ -51,8 +62,69 @@ namespace EmpaticaBLEClient
             {
                 var client = (Socket)ar.AsyncState;
                 client.EndConnect(ar);
-                Console.WriteLine("Established TCP socket for ID {0}", ID);
-                ConnectDone = true;
+                Console.WriteLine("[CONN] Established TCP socket for ID {0}", ID);
+                //ConnectDone = true;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.ToString());
+            }
+        }
+        void SendCallback(IAsyncResult ar)
+        {
+            try
+            {
+                // Retrieve the socket from the state object.
+                var client = (Socket)ar.AsyncState;
+                // Complete sending the data to the remote device.
+                client.EndSend(ar);
+                Console.WriteLine("[ <= ] Connect request sent from " + ID);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.ToString());
+            }
+        }
+
+        void ReceiveCallback(IAsyncResult ar)
+        {
+            try
+            {
+                // Retrieve the state object and the client socket 
+                // from the asynchronous state object.
+                var state = (StateObject)ar.AsyncState;
+                var client = state.WorkSocket;
+
+                // Read data from the remote device.
+                var bytesRead = client.EndReceive(ar);
+
+                if (bytesRead > 0)
+                {
+                    // There might be more data, so store the data received so far.
+                    state.Sb.Append(Encoding.ASCII.GetString(state.Buffer, 0, bytesRead));
+
+                    Console.WriteLine("[ => ] " + state.Sb.ToString());
+                    //_response = 
+
+                    //ParseResponse(_response);
+
+                    state.Sb.Clear();
+
+                    //ReceiveDone.Set();
+
+                    // Get the rest of the data.
+                    client.BeginReceive(state.Buffer, 0, StateObject.BufferSize, 0, ReceiveCallback, state);
+                }
+                else
+                {
+                    // All the data has arrived; put it in response.
+                    if (state.Sb.Length > 1)
+                    {
+                        _response = state.Sb.ToString();
+                    }
+                    // Signal that all bytes have been received.
+                    //ReceiveDone.Set();
+                }
             }
             catch (Exception e)
             {
@@ -132,12 +204,13 @@ namespace EmpaticaBLEClient
                         // zero padded
                         string device_id = entity.Split(' ')[1];
                         string device_model = entity.Split(' ')[2];
-                        string ifAllowed = entity.Split(' ')[3];
+                        bool isAllowed = !entity.Split(' ')[3].Contains("not_allowed");
                         if (!DiscoveredDeviceID.Contains(device_id))
                         {
                             // First time discovery
                             DiscoveredDeviceID.Add(device_id);
-                            DeviceList.Add(device_id, new E4Device(device_id, (!ifAllowed.Contains("not_allowed"))));
+                            DeviceList.Add(device_id, new E4Device(device_id, isAllowed));
+                            if (isAllowed) ActiveDeviceID.Add(device_id);
                         }
                     }
                 }
