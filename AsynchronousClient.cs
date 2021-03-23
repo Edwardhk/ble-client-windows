@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace EmpaticaBLEClient
 {
@@ -14,18 +15,49 @@ namespace EmpaticaBLEClient
     }
     public class E4Device
     {
+        // Networking params
+        const string ServerAddress = "127.0.0.1";
+        const int ServerPort = 28000;
         public Socket TCPsocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        public bool ConnectDone = false;
+
+        // Device params
         public string ID = "";
         public bool IfAllowed = false;
         public List<string> typesOfData = new List<string> {
             "acc", "bvp", "gsr", "ibi", "tmp", "bat", "tag"
         };
         public Dictionary<string, DataStream> dataStreams = new Dictionary<string, DataStream>();
-        public E4Device(string id)
+        
+        public E4Device(string id, bool ifAllowed)
         {
             ID = id;
+            IfAllowed = ifAllowed;
             foreach (string type in typesOfData)
                 dataStreams.Add(type, new DataStream());
+
+            if (ifAllowed)
+            {
+                // Establish TCP connections for the device
+                var ipHostInfo = new IPHostEntry { AddressList = new[] { IPAddress.Parse(ServerAddress) } };
+                var ipAddress = ipHostInfo.AddressList[0];
+                var remoteEp = new IPEndPoint(ipAddress, ServerPort);
+                TCPsocket.BeginConnect(remoteEp, (ConnectCallback), TCPsocket);
+            }
+        }
+        void ConnectCallback(IAsyncResult ar)
+        {
+            try
+            {
+                var client = (Socket)ar.AsyncState;
+                client.EndConnect(ar);
+                Console.WriteLine("Established TCP socket for ID {0}", ID);
+                ConnectDone = true;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.ToString());
+            }
         }
     }
     public static class AsynchronousClient
@@ -35,6 +67,7 @@ namespace EmpaticaBLEClient
         private const int ServerPort = 28000;
 
         // Maintain the device connections
+        private const int REFRESH_INTERVAL = 1000;
         private static HashSet<string> DiscoveredDeviceID = new HashSet<string>();
         private static HashSet<string> ActiveDeviceID = new HashSet<string>();
         private static Dictionary<string, E4Device> DeviceList = new Dictionary<string, E4Device>();
@@ -66,16 +99,48 @@ namespace EmpaticaBLEClient
 
                 while (true)
                 {
-                    var msg = Console.ReadLine();
-                    Send(defaultClient, msg + Environment.NewLine);
-                    SendDone.WaitOne();
+                    Send(defaultClient, "device_discover_list" + Environment.NewLine);
                     Receive(defaultClient);
-                    ReceiveDone.WaitOne();
+                    Thread.Sleep(REFRESH_INTERVAL);
+                    //Console.WriteLine("[DEBUG] DiscoveredDeviceID: " + DiscoveredDeviceID.Count);
+                    //Console.WriteLine("[DEBUG] ActiveDeviceID: " + ActiveDeviceID.Count);
+                    //Console.WriteLine("[DEBUG] DeviceList: " + DeviceList.Count);
                 }
             }
             catch (Exception e)
             {
                 Console.WriteLine(e.ToString());
+            }
+        }
+
+        private static void ParseResponse(string response)
+        {
+            //Console.Write(response);
+            const string DEVICE_LIST = "R device_list ";
+            const string DEVICE_DISCOVER_LIST = "R device_discover_list ";
+
+            if(response.Contains(DEVICE_LIST) || response.Contains(DEVICE_DISCOVER_LIST))
+            {
+                List<string> entities = response.Split('|').ToList();
+                if (entities.Count == 1)
+                    return;
+                else
+                {
+                    entities.RemoveAt(0);
+                    foreach (string entity in entities)
+                    {
+                        // zero padded
+                        string device_id = entity.Split(' ')[1];
+                        string device_model = entity.Split(' ')[2];
+                        string ifAllowed = entity.Split(' ')[3];
+                        if (!DiscoveredDeviceID.Contains(device_id))
+                        {
+                            // First time discovery
+                            DiscoveredDeviceID.Add(device_id);
+                            DeviceList.Add(device_id, new E4Device(device_id, (!ifAllowed.Contains("not_allowed"))));
+                        }
+                    }
+                }
             }
         }
 
@@ -134,7 +199,7 @@ namespace EmpaticaBLEClient
                     state.Sb.Append(Encoding.ASCII.GetString(state.Buffer, 0, bytesRead));
                     _response = state.Sb.ToString();
 
-                    HandleResponseFromEmpaticaBLEServer(_response);
+                    ParseResponse(_response);
 
                     state.Sb.Clear();
 
@@ -184,11 +249,6 @@ namespace EmpaticaBLEClient
             {
                 Console.WriteLine(e.ToString());
             }
-        }
-
-        private static void HandleResponseFromEmpaticaBLEServer(string response)
-        {
-            Console.Write(response);
         }
     }
 }
