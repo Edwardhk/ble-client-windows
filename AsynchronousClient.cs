@@ -3,14 +3,41 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using System.Collections.Generic;
 
 namespace EmpaticaBLEClient
 {
+    public class DataStream
+    {
+        public bool IfSubscribe = false;
+        public List<Tuple<double, double>> Data = new List<Tuple<double, double>>();
+    }
+    public class E4Device
+    {
+        public Socket TCPsocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        public string ID = "";
+        public bool IfAllowed = false;
+        public List<string> typesOfData = new List<string> {
+            "acc", "bvp", "gsr", "ibi", "tmp", "bat", "tag"
+        };
+        public Dictionary<string, DataStream> dataStreams = new Dictionary<string, DataStream>();
+        public E4Device(string id)
+        {
+            ID = id;
+            foreach (string type in typesOfData)
+                dataStreams.Add(type, new DataStream());
+        }
+    }
     public static class AsynchronousClient
     {
         // The port number for the remote device.
         private const string ServerAddress = "127.0.0.1";
         private const int ServerPort = 28000;
+
+        // Maintain the device connections
+        private static HashSet<string> DiscoveredDeviceID = new HashSet<string>();
+        private static HashSet<string> ActiveDeviceID = new HashSet<string>();
+        private static Dictionary<string, E4Device> DeviceList = new Dictionary<string, E4Device>();
 
         // ManualResetEvent instances signal completion.
         private static readonly ManualResetEvent ConnectDone = new ManualResetEvent(false);
