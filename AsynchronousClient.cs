@@ -58,18 +58,18 @@ namespace EmpaticaBLEClient
                 var remoteEp = new IPEndPoint(ipAddress, ServerPort);
 
                 // Create a TCP/IP socket.
-                var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                var defaultClient = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
                 // Connect to the remote endpoint.
-                client.BeginConnect(remoteEp, (ConnectCallback), client);
+                defaultClient.BeginConnect(remoteEp, (ConnectCallback), defaultClient);
                 ConnectDone.WaitOne();
 
                 while (true)
                 {
                     var msg = Console.ReadLine();
-                    Send(client, msg + Environment.NewLine);
+                    Send(defaultClient, msg + Environment.NewLine);
                     SendDone.WaitOne();
-                    Receive(client);
+                    Receive(defaultClient);
                     ReceiveDone.WaitOne();
                 }
             }
