@@ -19,7 +19,6 @@ namespace EmpaticaBLEClient
         const string ServerAddress = "127.0.0.1";
         const int ServerPort = 28000;
         public Socket TCPsocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        public bool ConnectDone = false;
         string _response = "";
 
         // Device params
@@ -30,8 +29,11 @@ namespace EmpaticaBLEClient
         };
         public Dictionary<string, DataStream> dataStreams = new Dictionary<string, DataStream>();
 
-        // 
-        
+        // ManualResetEvent instances signal completion.
+        private readonly ManualResetEvent ConnectDone = new ManualResetEvent(false);
+        private readonly ManualResetEvent SendDone = new ManualResetEvent(false);
+        private readonly ManualResetEvent ReceiveDone = new ManualResetEvent(false);
+
         public E4Device(string id, bool ifAllowed)
         {
             ID = id;
@@ -46,16 +48,40 @@ namespace EmpaticaBLEClient
                 var ipAddress = ipHostInfo.AddressList[0];
                 var remoteEp = new IPEndPoint(ipAddress, ServerPort);
                 TCPsocket.BeginConnect(remoteEp, (ConnectCallback), TCPsocket);
-
-                // Establish connect request on TCP socket
-                byte[] byteData = Encoding.ASCII.GetBytes("device_connect " + ID);
-                TCPsocket.BeginSend(byteData, 0, byteData.Length, 0, (SendCallback), TCPsocket);
+                ConnectDone.WaitOne();
 
                 // Establish listening callback
+
+                SendCommandAndReceive("device_connect_btle " + ID);
+                SendCommandAndReceive("device_subscribe gsr ON");
+            }
+            MainCycle();
+        }
+
+        void MainCycle()
+        {
+            while (true)
+            {
+                Thread.Sleep(1000);
                 var state = new StateObject { WorkSocket = TCPsocket };
                 TCPsocket.BeginReceive(state.Buffer, 0, StateObject.BufferSize, 0, ReceiveCallback, state);
             }
         }
+
+        void SendCommandAndReceive(string cmd)
+        {
+            Console.WriteLine("[ => ] Sent: " + cmd);
+
+            // Establish connect request on TCP socket
+            byte[] byteData = Encoding.ASCII.GetBytes(cmd + Environment.NewLine);
+            TCPsocket.BeginSend(byteData, 0, byteData.Length, 0, SendCallback, TCPsocket);
+            SendDone.WaitOne();
+
+            var state = new StateObject { WorkSocket = TCPsocket };
+            TCPsocket.BeginReceive(state.Buffer, 0, StateObject.BufferSize, 0, ReceiveCallback, state);
+            ReceiveDone.WaitOne();
+        }
+
         void ConnectCallback(IAsyncResult ar)
         {
             try
@@ -63,7 +89,7 @@ namespace EmpaticaBLEClient
                 var client = (Socket)ar.AsyncState;
                 client.EndConnect(ar);
                 Console.WriteLine("[CONN] Established TCP socket for ID {0}", ID);
-                //ConnectDone = true;
+                ConnectDone.Set();
             }
             catch (Exception e)
             {
@@ -78,7 +104,7 @@ namespace EmpaticaBLEClient
                 var client = (Socket)ar.AsyncState;
                 // Complete sending the data to the remote device.
                 client.EndSend(ar);
-                Console.WriteLine("[ <= ] Connect request sent from " + ID);
+                SendDone.Set();
             }
             catch (Exception e)
             {
@@ -102,15 +128,11 @@ namespace EmpaticaBLEClient
                 {
                     // There might be more data, so store the data received so far.
                     state.Sb.Append(Encoding.ASCII.GetString(state.Buffer, 0, bytesRead));
-
-                    Console.WriteLine("[ => ] " + state.Sb.ToString());
-                    //_response = 
-
+                    _response = state.Sb.ToString();
                     //ParseResponse(_response);
-
                     state.Sb.Clear();
 
-                    //ReceiveDone.Set();
+                    ReceiveDone.Set();
 
                     // Get the rest of the data.
                     client.BeginReceive(state.Buffer, 0, StateObject.BufferSize, 0, ReceiveCallback, state);
@@ -125,11 +147,18 @@ namespace EmpaticaBLEClient
                     // Signal that all bytes have been received.
                     //ReceiveDone.Set();
                 }
+
+                Console.WriteLine("[ => ] Completed: " + _response);
             }
             catch (Exception e)
             {
                 Console.WriteLine(e.ToString());
             }
+        }
+
+        void SubscribeToData()
+        {
+
         }
     }
     public static class AsynchronousClient
@@ -203,7 +232,7 @@ namespace EmpaticaBLEClient
                     {
                         // zero padded
                         string device_id = entity.Split(' ')[1];
-                        string device_model = entity.Split(' ')[2];
+                        string device_model = entity.Split(' ')[2]; // By default it's Empatica_E4
                         bool isAllowed = !entity.Split(' ')[3].Contains("not_allowed");
                         if (!DiscoveredDeviceID.Contains(device_id))
                         {
