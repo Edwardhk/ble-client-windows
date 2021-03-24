@@ -5,13 +5,30 @@ using System.Text;
 using System.Threading;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace EmpaticaBLEClient
 {
     public class DataStream
     {
         public bool IfSubscribe = false;
-        public List<Tuple<double, double>> Data = new List<Tuple<double, double>>();
+        // Tuple<timestamp, <data1, data2...>>
+        public List<Tuple<double, List<double>>> Data = new List<Tuple<double, List<double>>>();
+
+        public void PrintData()
+        {
+            foreach(var eachData in Data)
+            {
+                double timestamp = eachData.Item1;
+                List<double> data = eachData.Item2;
+                Console.Write("[T: " + timestamp + "]: ");
+                foreach(double datapoint in data)
+                {
+                    Console.Write(datapoint + " ");
+                }
+                Console.WriteLine();
+            }
+        }
     }
     public class E4Device
     {
@@ -25,10 +42,11 @@ namespace EmpaticaBLEClient
         private bool ifConnected = false;
 
         // Device params
+        private const int REFRESH_INTERVAL = 5000;
         public string ID = "";
         public bool IfAllowed = false;
         public List<string> typesOfData = new List<string> {
-            "acc", "bvp", "gsr", "ibi", "tmp", "bat", "tag"
+            "E4_Acc", "E4_Bvp", "E4_Gsr", "E4_Temp", "E4_Ibi", "E4_Hr", "E4_Battery", "E4_Tag"
         };
         public Dictionary<string, DataStream> dataStreams = new Dictionary<string, DataStream>();
 
@@ -55,19 +73,22 @@ namespace EmpaticaBLEClient
                 ConnectDone.WaitOne();
 
                 // Establish listening callback
-
-                SendCommandAndReceive("device_connect_btle " + ID);
+                Send("device_connect " + ID);
+                SendDone.WaitOne();
+                Receive();
+                ReceiveDone.WaitOne();
             }
-            MainCycle();
+            while (true) {
+                Thread.Sleep(REFRESH_INTERVAL);
+                foreach (string type in typesOfData)
+                    Console.WriteLine(type + ": " + dataStreams[type].Data.Count);
+            }
         }
 
-        void MainCycle()
+        // TODO: Write to file
+        void WriteToFile()
         {
-            while (true)
-            {
-                Thread.Sleep(1000);
-                // TODO: Probe for current status of device
-            }
+
         }
 
         void ParseResponse(string res)
@@ -75,36 +96,81 @@ namespace EmpaticaBLEClient
             // It starts with either response(R) or data (E4_xxx)
             if (res[0] == 'R')
             {
-                if(res.Contains("device_connect_btle OK"))
+                if (res.Contains("device_connect_btle OK"))
                 {
-                    // Bad hardcoded temp solution
                     ifConnectedBTLE = true;
-                    SendCommandAndReceive("device_connect " + ID);
+                    // Bad hardcoded temp solution
+                    if (!ifConnected)
+                    {
+                        Send("device_connect " + ID);
+                        SendDone.WaitOne();
+                        Receive();
+                        ReceiveDone.WaitOne();
+                    }
                 }
                 else if (res.Contains("device_connect OK"))
                 {
                     ifConnected = true;
-                    SendCommandAndReceive("device_subscribe acc ON");
+                    Send("device_subscribe acc ON");
+                    SendDone.WaitOne();
+                    Receive();
+                    ReceiveDone.WaitOne();
+                }
+                else if (res.Contains("device_subscribe acc OK"))
+                {
+                    //var msg = Console.ReadLine();
+                    //Send(msg);
+                    //SendDone.WaitOne();
+                    //Receive();
+                    //ReceiveDone.WaitOne();
                 }
             }
+            // TODO: Need preprocessing!! Multiple lines as single response observed
             else if (res[0] == 'E')
             {
-                Console.WriteLine("EEEEEEEEEEEEEEEEEEEEE");
+                string[] splitRes = res.Split('\n');
+
+                foreach (string resLine in splitRes)
+                { 
+                    // Handle empty line
+                    if (resLine.Length == 0) continue; 
+
+                    // E4_Acc <TIMESTAMP> <> <> <>
+                    // Others: E4_xxx <TIMESTAMP> <> <>
+                    int dataLen = (resLine.Contains("E4_Acc ")) ? 3 : 2;
+
+                    string[] _s = resLine.Split(' ');
+                    string dataType = _s[0];
+                    double timestamp = Convert.ToDouble(_s[1]);
+                    List<double> tempData = new List<double>();
+                    for (int i = 0; i < dataLen; i++)
+                        tempData.Add(Convert.ToDouble(_s[i + 2]));
+                    dataStreams[dataType].Data.Add(new Tuple<double, List<double>>(timestamp, tempData));
+                }
             }
         }
+        void Receive()
+        {
+            try
+            {
+                // Create the state object.
+                var state = new StateObject { WorkSocket = TCPsocket };
 
-        void SendCommandAndReceive(string cmd)
+                // Begin receiving the data from the remote device.
+                TCPsocket.BeginReceive(state.Buffer, 0, StateObject.BufferSize, 0, ReceiveCallback, state);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.ToString());
+            }
+        }
+        void Send(string cmd)
         {
             Console.WriteLine("[ <= ] Sent: " + cmd);
 
             // Establish connect request on TCP socket
             byte[] byteData = Encoding.ASCII.GetBytes(cmd + Environment.NewLine);
             TCPsocket.BeginSend(byteData, 0, byteData.Length, 0, SendCallback, TCPsocket);
-            SendDone.WaitOne();
-
-            var state = new StateObject { WorkSocket = TCPsocket };
-            TCPsocket.BeginReceive(state.Buffer, 0, StateObject.BufferSize, 0, ReceiveCallback, state);
-            ReceiveDone.WaitOne();
         }
         void ConnectCallback(IAsyncResult ar)
         {
@@ -152,6 +218,8 @@ namespace EmpaticaBLEClient
                     // There might be more data, so store the data received so far.
                     state.Sb.Append(Encoding.ASCII.GetString(state.Buffer, 0, bytesRead));
                     _response = state.Sb.ToString();
+                    ParseResponse(_response);
+
                     state.Sb.Clear();
 
                     ReceiveDone.Set();
@@ -167,11 +235,9 @@ namespace EmpaticaBLEClient
                         _response = state.Sb.ToString();
                     }
                     // Signal that all bytes have been received.
-                    //ReceiveDone.Set();
+                    ReceiveDone.Set();
                 }
-
-                ParseResponse(_response);
-                Console.WriteLine("[ => ] Completed: " + _response);
+                //Console.WriteLine("[ => ] Completed: " + _response);
             }
             catch (Exception e)
             {
@@ -215,16 +281,15 @@ namespace EmpaticaBLEClient
                 // Connect to the remote endpoint.
                 defaultClient.BeginConnect(remoteEp, (ConnectCallback), defaultClient);
                 ConnectDone.WaitOne();
-
-                while (true)
-                {
-                    Send(defaultClient, "device_discover_list" + Environment.NewLine);
-                    Receive(defaultClient);
-                    Thread.Sleep(REFRESH_INTERVAL);
-                    //Console.WriteLine("[DEBUG] DiscoveredDeviceID: " + DiscoveredDeviceID.Count);
-                    //Console.WriteLine("[DEBUG] ActiveDeviceID: " + ActiveDeviceID.Count);
-                    //Console.WriteLine("[DEBUG] DeviceList: " + DeviceList.Count);
-                }
+                DeviceList.Add("634D5C", new E4Device("634D5C", true));
+                //while(DiscoveredDeviceID.Count == 0 && DeviceList.Count == 0)
+                //{
+                //    Thread.Sleep(REFRESH_INTERVAL);
+                //    Send(defaultClient, "device_discover_list" + Environment.NewLine);
+                //    SendDone.WaitOne();
+                //    Receive(defaultClient);
+                //    ReceiveDone.WaitOne();
+                //}
             }
             catch (Exception e)
             {
@@ -234,11 +299,11 @@ namespace EmpaticaBLEClient
 
         private static void ParseResponse(string response)
         {
-            //Console.Write(response);
+            Console.Write(response);
             const string DEVICE_LIST = "R device_list ";
             const string DEVICE_DISCOVER_LIST = "R device_discover_list ";
 
-            if(response.Contains(DEVICE_LIST) || response.Contains(DEVICE_DISCOVER_LIST))
+            if (response.Contains(DEVICE_LIST) || response.Contains(DEVICE_DISCOVER_LIST))
             {
                 List<string> entities = response.Split('|').ToList();
                 if (entities.Count == 1)
