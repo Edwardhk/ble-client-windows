@@ -5,7 +5,8 @@ using System.Text;
 using System.Threading;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using System.IO;
 
 namespace EmpaticaBLEClient
 {
@@ -14,15 +15,16 @@ namespace EmpaticaBLEClient
         public bool IfSubscribe = false;
         // Tuple<timestamp, <data1, data2...>>
         public List<Tuple<double, List<double>>> Data = new List<Tuple<double, List<double>>>();
+        public List<string> StrData = new List<string>();
 
         public void PrintData()
         {
-            foreach(var eachData in Data)
+            foreach (var eachData in Data)
             {
                 double timestamp = eachData.Item1;
                 List<double> data = eachData.Item2;
                 Console.Write("[T: " + timestamp + "]: ");
-                foreach(double datapoint in data)
+                foreach (double datapoint in data)
                 {
                     Console.Write(datapoint + " ");
                 }
@@ -43,6 +45,7 @@ namespace EmpaticaBLEClient
 
         // Device params
         private const int REFRESH_INTERVAL = 5000;
+        private const int RECORD_INTERVAL = 100;
         public string ID = "";
         public bool IfAllowed = false;
         public List<string> typesOfData = new List<string> {
@@ -62,8 +65,11 @@ namespace EmpaticaBLEClient
             IfAllowed = ifAllowed;
             foreach (string type in typesOfData)
                 dataStreams.Add(type, new DataStream());
+        }
 
-            if (ifAllowed)
+        public void StartE4Conn()
+        {
+            if (IfAllowed)
             {
                 // Establish TCP socket for the device
                 var ipHostInfo = new IPHostEntry { AddressList = new[] { IPAddress.Parse(ServerAddress) } };
@@ -78,17 +84,20 @@ namespace EmpaticaBLEClient
                 Receive();
                 ReceiveDone.WaitOne();
             }
-            while (true) {
-                Thread.Sleep(REFRESH_INTERVAL);
-                foreach (string type in typesOfData)
-                    Console.WriteLine(type + ": " + dataStreams[type].Data.Count);
-            }
         }
 
         // TODO: Write to file
-        void WriteToFile()
+        void WriteToFile(string type)
         {
+            string fileName = @"C:\Users\Workstation\Desktop\CUHK\_Neuroscience\LABBE\csv_data\" + ID + "_" + type + ".csv";
 
+
+            foreach(string dataLine in dataStreams[type].StrData)
+            {
+
+            }
+
+            Console.WriteLine("[_IO_] Recorded, clearing data");
         }
 
         void ParseResponse(string res)
@@ -113,6 +122,8 @@ namespace EmpaticaBLEClient
                     ifConnected = true;
                     Send("device_subscribe acc ON");
                     SendDone.WaitOne();
+                    //Send("device_subscribe bvp ON");
+                    //SendDone.WaitOne();
                     Receive();
                     ReceiveDone.WaitOne();
                 }
@@ -131,21 +142,23 @@ namespace EmpaticaBLEClient
                 string[] splitRes = res.Split('\n');
 
                 foreach (string resLine in splitRes)
-                { 
+                {
                     // Handle empty line
-                    if (resLine.Length == 0) continue; 
+                    if (resLine.Length == 0) continue;
 
                     // E4_Acc <TIMESTAMP> <> <> <>
                     // Others: E4_xxx <TIMESTAMP> <> <>
                     int dataLen = (resLine.Contains("E4_Acc ")) ? 3 : 2;
+                    dataStreams[resLine.Split(' ')[0]].StrData.Add(resLine);
+                    Console.WriteLine(ID + ": [" + resLine.Split(' ')[0] + "]: " + resLine);
 
-                    string[] _s = resLine.Split(' ');
-                    string dataType = _s[0];
-                    double timestamp = Convert.ToDouble(_s[1]);
-                    List<double> tempData = new List<double>();
-                    for (int i = 0; i < dataLen; i++)
-                        tempData.Add(Convert.ToDouble(_s[i + 2]));
-                    dataStreams[dataType].Data.Add(new Tuple<double, List<double>>(timestamp, tempData));
+                    //string[] _s = resLine.Split(' ');
+                    //string dataType = _s[0];
+                    //double timestamp = Convert.ToDouble(_s[1]);
+                    //List<double> tempData = new List<double>();
+                    //for (int i = 0; i < dataLen; i++)
+                    //    tempData.Add(Convert.ToDouble(_s[i + 2]));
+                    //dataStreams[dataType].Data.Add(new Tuple<double, List<double>>(timestamp, tempData));
                 }
             }
         }
@@ -247,12 +260,12 @@ namespace EmpaticaBLEClient
     }
     public static class AsynchronousClient
     {
-        // The port number for the remote device.
-        private const string ServerAddress = "127.0.0.1";
-        private const int ServerPort = 28000;
+        //// The port number for the remote device.
+        //private const string ServerAddress = "127.0.0.1";
+        //private const int ServerPort = 28000;
 
         // Maintain the device connections
-        private const int REFRESH_INTERVAL = 1000;
+        private const int REFRESH_INTERVAL = 5000;
         private static HashSet<string> DiscoveredDeviceID = new HashSet<string>();
         private static HashSet<string> ActiveDeviceID = new HashSet<string>();
         private static Dictionary<string, E4Device> DeviceList = new Dictionary<string, E4Device>();
@@ -265,31 +278,45 @@ namespace EmpaticaBLEClient
         // The response from the remote device.
         private static String _response = String.Empty;
 
+        /* TABLE:
+            A01DAB - 764B5C
+            
+        */
         public static void StartClient()
         {
             // Connect to a remote device.
             try
             {
                 // Establish the remote endpoint for the socket.
-                var ipHostInfo = new IPHostEntry { AddressList = new[] { IPAddress.Parse(ServerAddress) } };
-                var ipAddress = ipHostInfo.AddressList[0];
-                var remoteEp = new IPEndPoint(ipAddress, ServerPort);
+                //var ipHostInfo = new IPHostEntry { AddressList = new[] { IPAddress.Parse(ServerAddress) } };
+                //var ipAddress = ipHostInfo.AddressList[0];
+                //var remoteEp = new IPEndPoint(ipAddress, ServerPort);
 
-                // Create a TCP/IP socket.
-                var defaultClient = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                //// Create a TCP/IP socket.
+                //var defaultClient = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
-                // Connect to the remote endpoint.
-                defaultClient.BeginConnect(remoteEp, (ConnectCallback), defaultClient);
-                ConnectDone.WaitOne();
-                DeviceList.Add("634D5C", new E4Device("634D5C", true));
-                //while(DiscoveredDeviceID.Count == 0 && DeviceList.Count == 0)
-                //{
-                //    Thread.Sleep(REFRESH_INTERVAL);
-                //    Send(defaultClient, "device_discover_list" + Environment.NewLine);
-                //    SendDone.WaitOne();
-                //    Receive(defaultClient);
-                //    ReceiveDone.WaitOne();
-                //}
+                //// Connect to the remote endpoint.
+                //defaultClient.BeginConnect(remoteEp, (ConnectCallback), defaultClient);
+                //ConnectDone.WaitOne();
+                //DeviceList.Add("634D5C", new E4Device("634D5C", true));
+
+                string[] DeviceIDs = { "764B5C", "634D5C" };
+
+                foreach(string DeviceID in DeviceIDs)
+                {
+                    DeviceList.Add(DeviceID, new E4Device(DeviceID, true));
+                    // Set non-blocking threads for multiple TCP conn
+                    System.Timers.Timer timer = new System.Timers.Timer(1000);
+                    timer.Elapsed += (s, e) => {
+                        DeviceList[DeviceID].StartE4Conn();
+                    };
+                    timer.AutoReset = false;
+                    timer.Start();
+                }
+
+                while (true) {
+                    Thread.Sleep(REFRESH_INTERVAL);
+                }
             }
             catch (Exception e)
             {
