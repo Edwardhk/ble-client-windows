@@ -34,19 +34,25 @@ namespace EmpaticaBLEClient
     }
     public class E4Device
     {
+        const bool DEBUG_MODE = false;
+
         // Networking params
         const string ServerAddress = "127.0.0.1";
         const int ServerPort = 28000;
         public Socket TCPsocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
         // Connection checking params
-        private bool ifConnectedBTLE = false;
-        private bool ifConnected = false;
+        private bool isConnectedBTLE = false;
+        private bool isSubscribled = false;
+        public bool isConnected = false;
 
         // Device params
         private const int REFRESH_INTERVAL = 5000;
         private const int RECORD_INTERVAL = 100;
+        private double latestBatteryLevel = 1.0;
+        
         public string ID = "";
+        public string DisplayName = "";
         public bool IfAllowed = false;
         public List<string> typesOfData = new List<string> {
             "E4_Acc", "E4_Bvp", "E4_Gsr", "E4_Temp", "E4_Ibi", "E4_Hr", "E4_Battery", "E4_Tag"
@@ -59,9 +65,10 @@ namespace EmpaticaBLEClient
         private readonly ManualResetEvent ReceiveDone = new ManualResetEvent(false);
         string _response = "";
 
-        public E4Device(string id, bool ifAllowed)
+        public E4Device(string id, string displayName, bool ifAllowed)
         {
             ID = id;
+            DisplayName = displayName;
             IfAllowed = ifAllowed;
             foreach (string type in typesOfData)
                 dataStreams.Add(type, new DataStream());
@@ -78,12 +85,36 @@ namespace EmpaticaBLEClient
                 TCPsocket.BeginConnect(remoteEp, ConnectCallback, TCPsocket);
                 ConnectDone.WaitOne();
 
-                // Establish listening callback
-                Send("device_connect " + ID);
-                SendDone.WaitOne();
-                Receive();
-                ReceiveDone.WaitOne();
+                System.Timers.Timer timer = new System.Timers.Timer(1000);
+                timer.Elapsed += (s, e) => ScheduledChecking();
+                timer.Start();
             }
+        }
+
+        void ScheduledChecking()
+        {
+            if (!isConnected)
+                CheckConnectionStatus();
+            else
+                CheckBatteryStatus();
+
+            Receive();
+            ReceiveDone.WaitOne();
+        }
+
+        void CheckBatteryStatus()
+        {
+            Send("device_subscribe bat ON");
+            SendDone.WaitOne();
+            SendDone.Reset();
+        }
+
+        void CheckConnectionStatus()
+        {
+            // Establish listening callback
+            Send("device_connect " + ID);
+            SendDone.WaitOne();
+            SendDone.Reset();
         }
 
         // TODO: Write to file
@@ -91,13 +122,13 @@ namespace EmpaticaBLEClient
         {
             string fileName = @"C:\Users\Workstation\Desktop\CUHK\_Neuroscience\LABBE\csv_data\" + ID + "_" + type + ".csv";
 
+            //foreach(string dataLine in dataStreams[type].StrData)
+            //{
 
-            foreach(string dataLine in dataStreams[type].StrData)
-            {
+            //}
 
-            }
-
-            Console.WriteLine("[_IO_] Recorded, clearing data");
+            if (DEBUG_MODE)
+                Console.WriteLine("[_IO_] Recorded, clearing data");
         }
 
         void ParseResponse(string res)
@@ -105,38 +136,50 @@ namespace EmpaticaBLEClient
             // It starts with either response(R) or data (E4_xxx)
             if (res[0] == 'R')
             {
+                if (DEBUG_MODE)
+                    Console.WriteLine(res);
                 if (res.Contains("device_connect_btle OK"))
                 {
-                    ifConnectedBTLE = true;
-                    // Bad hardcoded temp solution
-                    if (!ifConnected)
-                    {
-                        Send("device_connect " + ID);
-                        SendDone.WaitOne();
-                        Receive();
-                        ReceiveDone.WaitOne();
-                    }
+                    isConnectedBTLE = true;
+                    //// Bad hardcoded temp solution
+                    //if (!isConnected)
+                    //{
+                    //    Send("device_connect " + ID);
+                    //    SendDone.WaitOne();
+                    //    Receive();
+                    //    ReceiveDone.WaitOne();
+                    //}
                 }
                 else if (res.Contains("device_connect OK"))
                 {
-                    ifConnected = true;
+                    // TODO: WTF, fake connections needed to be addressed
+                    isConnected = true;
                     Send("device_subscribe acc ON");
                     SendDone.WaitOne();
-                    //Send("device_subscribe bvp ON");
-                    //SendDone.WaitOne();
-                    Receive();
-                    ReceiveDone.WaitOne();
+                    SendDone.Reset();
+                    Send("device_subscribe bvp ON");
+                    SendDone.WaitOne();
+                    SendDone.Reset();
                 }
                 else if (res.Contains("device_subscribe acc OK"))
                 {
-                    //var msg = Console.ReadLine();
-                    //Send(msg);
-                    //SendDone.WaitOne();
-                    //Receive();
-                    //ReceiveDone.WaitOne();
+                    isSubscribled = true;
+                }
+                else if (res.Contains("ERR The device requested for connection is not available"))
+                {
+                    isConnected = false;
+                    isSubscribled = false;
+                }
+                else if(res.Contains("ERR You've tried to connect to the device from the same connection"))
+                {
+                    // Cannot validate if connected or not
+                }
+                else if(res.Contains("R connection lost to device"))
+                {
+                    isConnected = false;
                 }
             }
-            // TODO: Need preprocessing!! Multiple lines as single response observed
+            // Handle E4 data response (could be multi-line in single response)
             else if (res[0] == 'E')
             {
                 string[] splitRes = res.Split('\n');
@@ -149,8 +192,8 @@ namespace EmpaticaBLEClient
                     // E4_Acc <TIMESTAMP> <> <> <>
                     // Others: E4_xxx <TIMESTAMP> <> <>
                     int dataLen = (resLine.Contains("E4_Acc ")) ? 3 : 2;
-                    dataStreams[resLine.Split(' ')[0]].StrData.Add(resLine);
-                    Console.WriteLine(ID + ": [" + resLine.Split(' ')[0] + "]: " + resLine);
+                    //dataStreams[resLine.Split(' ')[0]].StrData.Add(resLine);
+                    //Console.WriteLine(ID + ": [" + resLine.Split(' ')[0] + "]: " + resLine);
 
                     //string[] _s = resLine.Split(' ');
                     //string dataType = _s[0];
@@ -179,7 +222,8 @@ namespace EmpaticaBLEClient
         }
         void Send(string cmd)
         {
-            Console.WriteLine("[ <= ] Sent: " + cmd);
+            if (DEBUG_MODE)
+                Console.WriteLine("[ <= ] Sent: " + cmd);
 
             // Establish connect request on TCP socket
             byte[] byteData = Encoding.ASCII.GetBytes(cmd + Environment.NewLine);
@@ -191,7 +235,9 @@ namespace EmpaticaBLEClient
             {
                 var client = (Socket)ar.AsyncState;
                 client.EndConnect(ar);
-                Console.WriteLine("[CONN] Established TCP socket for ID {0}", ID);
+
+                if (DEBUG_MODE)
+                    Console.WriteLine("[CONN] Established TCP socket for ID {0}", ID);
                 ConnectDone.Set();
             }
             catch (Exception e)
@@ -250,7 +296,10 @@ namespace EmpaticaBLEClient
                     // Signal that all bytes have been received.
                     ReceiveDone.Set();
                 }
-                //Console.WriteLine("[ => ] Completed: " + _response);
+                state.Sb.Clear();
+
+                if(DEBUG_MODE)
+                    Console.WriteLine("[ => ] Completed: " + _response);
             }
             catch (Exception e)
             {
@@ -280,7 +329,7 @@ namespace EmpaticaBLEClient
 
         /* TABLE:
             A01DAB - 764B5C
-            
+            A010BC - 634D5C
         */
         public static void StartClient()
         {
@@ -300,13 +349,17 @@ namespace EmpaticaBLEClient
                 //ConnectDone.WaitOne();
                 //DeviceList.Add("634D5C", new E4Device("634D5C", true));
 
-                string[] DeviceIDs = { "764B5C", "634D5C" };
+                var DevicesIDs = new List<Tuple<string, string>>{
+                    new Tuple<string, string>("foo", "bar"),
+                };
 
-                foreach(string DeviceID in DeviceIDs)
+                foreach (var DeviceIDName in DevicesIDs)
                 {
-                    DeviceList.Add(DeviceID, new E4Device(DeviceID, true));
-                    // Set non-blocking threads for multiple TCP conn
-                    System.Timers.Timer timer = new System.Timers.Timer(1000);
+                    string DeviceID = DeviceIDName.Item1;
+                    string DisplayName = DeviceIDName.Item2;
+                    DeviceList.Add(DeviceID, new E4Device(DeviceID, DisplayName, true));
+                    // Start non-blocking threads for multiple TCP conn
+                    System.Timers.Timer timer = new System.Timers.Timer(500);
                     timer.Elapsed += (s, e) => {
                         DeviceList[DeviceID].StartE4Conn();
                     };
@@ -315,147 +368,23 @@ namespace EmpaticaBLEClient
                 }
 
                 while (true) {
-                    Thread.Sleep(REFRESH_INTERVAL);
-                }
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(e.ToString());
-            }
-        }
-
-        private static void ParseResponse(string response)
-        {
-            Console.Write(response);
-            const string DEVICE_LIST = "R device_list ";
-            const string DEVICE_DISCOVER_LIST = "R device_discover_list ";
-
-            if (response.Contains(DEVICE_LIST) || response.Contains(DEVICE_DISCOVER_LIST))
-            {
-                List<string> entities = response.Split('|').ToList();
-                if (entities.Count == 1)
-                    return;
-                else
-                {
-                    entities.RemoveAt(0);
-                    foreach (string entity in entities)
+                    Console.Clear();
+                    // Keep main thread alive
+                    foreach (var DeviceIDName in DevicesIDs)
                     {
-                        // zero padded
-                        string device_id = entity.Split(' ')[1];
-                        string device_model = entity.Split(' ')[2]; // By default it's Empatica_E4
-                        bool isAllowed = !entity.Split(' ')[3].Contains("not_allowed");
-                        if (!DiscoveredDeviceID.Contains(device_id))
-                        {
-                            // First time discovery
-                            DiscoveredDeviceID.Add(device_id);
-                            DeviceList.Add(device_id, new E4Device(device_id, isAllowed));
-                            if (isAllowed) ActiveDeviceID.Add(device_id);
-                        }
+                        string DeviceID = DeviceIDName.Item1;
+                        string DisplayName = DeviceIDName.Item2;
+
+                        string msg = "";
+
+                        if (DeviceList[DeviceID].isConnected)
+                            msg = "Connected with data size " + DeviceList[DeviceID].dataStreams["E4_Acc"].StrData.Count;
+                        else
+                            msg = "Connection request sent...";
+                        Console.WriteLine(String.Format("Device {0} status: {1}", DisplayName, msg));
                     }
+                    Thread.Sleep(1500);
                 }
-            }
-        }
-
-        private static void ConnectCallback(IAsyncResult ar)
-        {
-            try
-            {
-                // Retrieve the socket from the state object.
-                var client = (Socket)ar.AsyncState;
-
-                // Complete the connection.
-                client.EndConnect(ar);
-
-                Console.WriteLine("Socket connected to {0}", client.RemoteEndPoint);
-
-                // Signal that the connection has been made.
-                ConnectDone.Set();
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(e.ToString());
-            }
-        }
-
-        private static void Receive(Socket client)
-        {
-            try
-            {
-                // Create the state object.
-                var state = new StateObject { WorkSocket = client };
-
-                // Begin receiving the data from the remote device.
-                client.BeginReceive(state.Buffer, 0, StateObject.BufferSize, 0, ReceiveCallback, state);
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(e.ToString());
-            }
-        }
-
-        private static void ReceiveCallback(IAsyncResult ar)
-        {
-            try
-            {
-                // Retrieve the state object and the client socket 
-                // from the asynchronous state object.
-                var state = (StateObject)ar.AsyncState;
-                var client = state.WorkSocket;
-
-                // Read data from the remote device.
-                var bytesRead = client.EndReceive(ar);
-
-                if (bytesRead > 0)
-                {
-                    // There might be more data, so store the data received so far.
-                    state.Sb.Append(Encoding.ASCII.GetString(state.Buffer, 0, bytesRead));
-                    _response = state.Sb.ToString();
-
-                    ParseResponse(_response);
-
-                    state.Sb.Clear();
-
-                    ReceiveDone.Set();
-
-                    // Get the rest of the data.
-                    client.BeginReceive(state.Buffer, 0, StateObject.BufferSize, 0, ReceiveCallback, state);
-                }
-                else
-                {
-                    // All the data has arrived; put it in response.
-                    if (state.Sb.Length > 1)
-                    {
-                        _response = state.Sb.ToString();
-                    }
-                    // Signal that all bytes have been received.
-                    ReceiveDone.Set();
-                }
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(e.ToString());
-            }
-        }
-
-        private static void Send(Socket client, String data)
-        {
-            // Convert the string data to byte data using ASCII encoding.
-            byte[] byteData = Encoding.ASCII.GetBytes(data);
-
-            // Begin sending the data to the remote device.
-            client.BeginSend(byteData, 0, byteData.Length, 0, SendCallback, client);
-        }
-
-        private static void SendCallback(IAsyncResult ar)
-        {
-            try
-            {
-                // Retrieve the socket from the state object.
-                var client = (Socket)ar.AsyncState;
-                // Complete sending the data to the remote device.
-                client.EndSend(ar);
-                // Signal that all bytes have been sent.
-                SendDone.Set();
             }
             catch (Exception e)
             {
