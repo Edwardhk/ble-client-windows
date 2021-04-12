@@ -48,14 +48,14 @@ namespace EmpaticaBLEClient
 
         // Device params
         private const int REFRESH_INTERVAL = 5000;
-        private const int RECORD_INTERVAL = 100;
+        private const int RECORD_INTERVAL = 5000;
         private double latestBatteryLevel = 1.0;
         
         public string ID = "";
         public string DisplayName = "";
         public bool IfAllowed = false;
         public List<string> typesOfData = new List<string> {
-            "E4_Acc", "E4_Bvp", "E4_Gsr", "E4_Temp", "E4_Ibi", "E4_Hr", "E4_Battery", "E4_Tag"
+            "E4_Acc", "E4_Bvp", "E4_Gsr", "E4_Temperature", "E4_Ibi", "E4_Hr", "E4_Battery", "E4_Tag"
         };
         public Dictionary<string, DataStream> dataStreams = new Dictionary<string, DataStream>();
 
@@ -96,17 +96,20 @@ namespace EmpaticaBLEClient
             if (!isConnected)
                 CheckConnectionStatus();
             else
+            {
                 CheckBatteryStatus();
-
+                CheckAndWriteToFile();
+            }
             Receive();
             ReceiveDone.WaitOne();
+            ReceiveDone.Reset();
         }
 
         void CheckBatteryStatus()
         {
-            Send("device_subscribe bat ON");
-            SendDone.WaitOne();
-            SendDone.Reset();
+            //Send("device_subscribe bat ON");
+            //SendDone.WaitOne();
+            //SendDone.Reset();
         }
 
         void CheckConnectionStatus()
@@ -117,10 +120,24 @@ namespace EmpaticaBLEClient
             SendDone.Reset();
         }
 
-        // TODO: Write to file
-        void WriteToFile(string type)
+        void CheckAndWriteToFile()
         {
-            string fileName = @"C:\Users\Workstation\Desktop\CUHK\_Neuroscience\LABBE\csv_data\" + ID + "_" + type + ".csv";
+            // File format: <YEAR>_<MONTH>_<DAY>_<TIME>
+            foreach (string dataType in typesOfData)
+            {
+                var targetStrData = dataStreams[dataType].StrData;
+                if (targetStrData.Count >= RECORD_INTERVAL)
+                {
+                    string dateAndTime = DateTime.Now.ToString("yyyy_MM_dd_HH_mm_ss");
+                    string filename = DisplayName + dataType + "_" + dateAndTime + ".csv";
+                    using (StreamWriter sWriter = new StreamWriter(filename))
+                    {
+                        foreach(string dataPoint in targetStrData)
+                            sWriter.Write(dataPoint.Replace(" ", ","));
+                    }
+                    targetStrData.Clear();
+                }
+            }
 
             //foreach(string dataLine in dataStreams[type].StrData)
             //{
@@ -136,8 +153,6 @@ namespace EmpaticaBLEClient
             // It starts with either response(R) or data (E4_xxx)
             if (res[0] == 'R')
             {
-                if (DEBUG_MODE)
-                    Console.WriteLine(res);
                 if (res.Contains("device_connect_btle OK"))
                 {
                     isConnectedBTLE = true;
@@ -152,14 +167,17 @@ namespace EmpaticaBLEClient
                 }
                 else if (res.Contains("device_connect OK"))
                 {
-                    // TODO: WTF, fake connections needed to be addressed
+                    // "E4_Gsr", "E4_Temp", "E4_Ibi", "E4_Hr"
                     isConnected = true;
-                    Send("device_subscribe acc ON");
-                    SendDone.WaitOne();
-                    SendDone.Reset();
-                    Send("device_subscribe bvp ON");
-                    SendDone.WaitOne();
-                    SendDone.Reset();
+
+                    string[] dataTypes = { "acc", "bvp", "gsr", "tmp", "ibi" };
+                    foreach (string dataType in dataTypes)
+                    {
+                        Send(String.Format("device_subscribe {0} ON", dataType));
+                        SendDone.WaitOne();
+                        SendDone.Reset();
+                        Thread.Sleep(100);
+                    }
                 }
                 else if (res.Contains("device_subscribe acc OK"))
                 {
@@ -182,6 +200,8 @@ namespace EmpaticaBLEClient
             // Handle E4 data response (could be multi-line in single response)
             else if (res[0] == 'E')
             {
+                if (DEBUG_MODE)
+                    Console.WriteLine(res);
                 string[] splitRes = res.Split('\n');
 
                 foreach (string resLine in splitRes)
@@ -192,16 +212,8 @@ namespace EmpaticaBLEClient
                     // E4_Acc <TIMESTAMP> <> <> <>
                     // Others: E4_xxx <TIMESTAMP> <> <>
                     int dataLen = (resLine.Contains("E4_Acc ")) ? 3 : 2;
-                    //dataStreams[resLine.Split(' ')[0]].StrData.Add(resLine);
+                    dataStreams[resLine.Split(' ')[0]].StrData.Add(resLine);
                     //Console.WriteLine(ID + ": [" + resLine.Split(' ')[0] + "]: " + resLine);
-
-                    //string[] _s = resLine.Split(' ');
-                    //string dataType = _s[0];
-                    //double timestamp = Convert.ToDouble(_s[1]);
-                    //List<double> tempData = new List<double>();
-                    //for (int i = 0; i < dataLen; i++)
-                    //    tempData.Add(Convert.ToDouble(_s[i + 2]));
-                    //dataStreams[dataType].Data.Add(new Tuple<double, List<double>>(timestamp, tempData));
                 }
             }
         }
@@ -298,8 +310,8 @@ namespace EmpaticaBLEClient
                 }
                 state.Sb.Clear();
 
-                if(DEBUG_MODE)
-                    Console.WriteLine("[ => ] Completed: " + _response);
+                //if(DEBUG_MODE)
+                //    Console.WriteLine("[ => ] Completed: " + _response);
             }
             catch (Exception e)
             {
@@ -327,30 +339,14 @@ namespace EmpaticaBLEClient
         // The response from the remote device.
         private static String _response = String.Empty;
 
-        /* TABLE:
-            A01DAB - 764B5C
-            A010BC - 634D5C
-        */
         public static void StartClient()
         {
             // Connect to a remote device.
             try
             {
-                // Establish the remote endpoint for the socket.
-                //var ipHostInfo = new IPHostEntry { AddressList = new[] { IPAddress.Parse(ServerAddress) } };
-                //var ipAddress = ipHostInfo.AddressList[0];
-                //var remoteEp = new IPEndPoint(ipAddress, ServerPort);
-
-                //// Create a TCP/IP socket.
-                //var defaultClient = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-
-                //// Connect to the remote endpoint.
-                //defaultClient.BeginConnect(remoteEp, (ConnectCallback), defaultClient);
-                //ConnectDone.WaitOne();
-                //DeviceList.Add("634D5C", new E4Device("634D5C", true));
-
-                var DevicesIDs = new List<Tuple<string, string>>{
-                    new Tuple<string, string>("foo", "bar"),
+                var DevicesIDs = new List<Tuple<string, string>>
+                {
+                    new Tuple<string, string>("HARDWARE ID ", "DISPLAY NAME")
                 };
 
                 foreach (var DeviceIDName in DevicesIDs)
@@ -378,12 +374,20 @@ namespace EmpaticaBLEClient
                         string msg = "";
 
                         if (DeviceList[DeviceID].isConnected)
-                            msg = "Connected with data size " + DeviceList[DeviceID].dataStreams["E4_Acc"].StrData.Count;
+                        {
+                            msg = "Connected with data size ---- ";
+
+                            // "E4_Acc", "E4_Bvp", "E4_Gsr", "E4_Temperature", "E4_Ibi", "E4_Hr", "E4_Battery", "E4_Tag"
+                            foreach (string dataType in DeviceList[DeviceID].typesOfData)
+                            {
+                                msg += dataType + ":" + DeviceList[DeviceID].dataStreams[dataType].StrData.Count + " ";
+                            }
+                        }
                         else
-                            msg = "Connection request sent...";
-                        Console.WriteLine(String.Format("Device {0} status: {1}", DisplayName, msg));
+                            msg = "No Connection... Trying to reconnect...";
+                        Console.WriteLine(String.Format("Device {0} status: {1}\r", DisplayName, msg));
                     }
-                    Thread.Sleep(1500);
+                    Thread.Sleep(1000);
                 }
             }
             catch (Exception e)
